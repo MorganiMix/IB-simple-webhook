@@ -54,6 +54,9 @@ class TradingBotAsync:
                             
                         if command['action'] == 'set_contract':
                             await self._async_set_contract(command['exchange'], command['secType'], command['symbol'])
+                        elif command['action'] == 'test_permissions':
+                            result = await self._async_test_permissions()
+                            self.result_queue.put(result)
                         elif command['action'] == 'check_position':
                             result = await self._async_check_position(command['direction'], command['contract'])
                             self.result_queue.put(result)
@@ -75,17 +78,43 @@ class TradingBotAsync:
         
     async def _async_set_contract(self, exchange, secType, symbol):
         """Set contract in async context"""
-        # Try SMART routing first for Hong Kong stocks
-        self.contract = Stock(symbol, 'SMART', 'HKD')
+        # For Hong Kong stocks, try different contract formats
+        contracts_to_try = [
+            # Try with SEHK exchange first
+            Stock(symbol, 'SEHK', 'HKD'),
+            # Try with SMART routing
+            Stock(symbol, 'SMART', 'HKD'),
+            # Try with full symbol format (some HK stocks need .HK suffix)
+            Stock(f"{symbol}.HK", 'SMART', 'HKD'),
+        ]
+        
+        for i, contract in enumerate(contracts_to_try):
+            try:
+                print(f"Trying contract {i+1}: {contract.symbol} on {contract.exchange}")
+                qualified_contracts = await self.ib.qualifyContractsAsync(contract)
+                if qualified_contracts:
+                    self.contract = qualified_contracts[0]
+                    print(f"✓ Contract qualified successfully: {self.contract}")
+                    return
+            except Exception as e:
+                print(f"✗ Contract {i+1} failed: {e}")
+                continue
+        
+        # If all attempts fail, raise an error
+        raise Exception(f"Could not qualify contract for symbol {symbol}. Check market data permissions and symbol format.")
+        
+    async def _async_test_permissions(self):
+        """Test market data permissions"""
         try:
-            await self.ib.qualifyContractsAsync(self.contract)
-            print(f"Contract set: {symbol} with SMART routing (HKD)")
+            # Try to get market data for a simple HK stock
+            test_contract = Stock('0005', 'SEHK', 'HKD')  # HSBC Holdings
+            qualified = await self.ib.qualifyContractsAsync(test_contract)
+            if qualified:
+                return {'success': 'Market data permissions OK for HK stocks'}
+            else:
+                return {'error': 'Could not qualify HK test contract'}
         except Exception as e:
-            print(f"SMART routing failed, trying SEHK: {e}")
-            # Fallback to SEHK if SMART fails
-            self.contract = Stock(symbol, 'SEHK', 'HKD')
-            await self.ib.qualifyContractsAsync(self.contract)
-            print(f"Contract set: {symbol} on SEHK exchange")
+            return {'error': f'Market data permission test failed: {e}'}
         
     async def _async_check_position(self, direction, contract):
         """Check position in async context"""
@@ -153,7 +182,19 @@ class TradingBotAsync:
             'secType': secType,
             'symbol': symbol
         })
-        time.sleep(1)  # Give time for contract to be set
+        time.sleep(3)  # Give more time for contract qualification
+        
+    def test_market_data_permissions(self):
+        """Test if we have market data permissions for HK stocks"""
+        self.command_queue.put({
+            'action': 'test_permissions'
+        })
+        
+        try:
+            result = self.result_queue.get(timeout=10)
+            return result
+        except queue.Empty:
+            return {'error': 'Market data permission test timeout'}
         
     def check_contract_position(self, direction, contract):
         """Thread-safe position checking"""
@@ -197,10 +238,24 @@ class TradingBotAsync:
 print("Initializing trading bot...")
 try:
     bot = TradingBotAsync('127.0.0.1', 4002, 130)
+    print("Bot connected to IB successfully")
+    
+    # Try to set contract with detailed logging
+    print(f"Setting contract for {instructment} on {exchange}...")
     bot.set_contract(exchange, "STK", instructment)
-    print("Bot initialized and contract set successfully")
+    
+    if bot.contract:
+        print(f"✓ Bot initialized successfully with contract: {bot.contract}")
+    else:
+        print("✗ Warning: Contract not set properly")
+        
 except Exception as e:
-    print(f"Error initializing bot: {str(e)}")
+    print(f"✗ Error initializing bot: {str(e)}")
+    print("Common issues:")
+    print("1. IB TWS/Gateway not running or not connected")
+    print("2. Market data permissions not enabled for Hong Kong stocks")
+    print("3. Client ID already in use")
+    print("4. Wrong port number (try 7497 for TWS live, 7496 for TWS paper)")
     raise
 
 # Webhook setup
@@ -268,4 +323,4 @@ def webhook():
 # Run the Flask app
 if __name__ == '__main__':
     print("Starting webhook server on port 8000...")
-    app.run(host='0.0.0.0', port=8000)
+    app.run(host='0.0.0.0', port=8001)
