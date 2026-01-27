@@ -7,7 +7,7 @@ import queue
 import time
 
 ############################
-exchange="SEHK" # Hong Kong Stock Exchange
+exchange="SMART" # Use SMART routing for Hong Kong stocks
 instructment="2800" # Tracker Fund of Hong Kong (HK stock)
 ############################
 
@@ -75,10 +75,17 @@ class TradingBotAsync:
         
     async def _async_set_contract(self, exchange, secType, symbol):
         """Set contract in async context"""
-        # Use SEHK for Hong Kong stocks with HKD currency
-        self.contract = Stock(symbol, 'SEHK', 'HKD')
-        await self.ib.qualifyContractsAsync(self.contract)
-        print(f"Contract set: {symbol} on SEHK exchange")
+        # Try SMART routing first for Hong Kong stocks
+        self.contract = Stock(symbol, 'SMART', 'HKD')
+        try:
+            await self.ib.qualifyContractsAsync(self.contract)
+            print(f"Contract set: {symbol} with SMART routing (HKD)")
+        except Exception as e:
+            print(f"SMART routing failed, trying SEHK: {e}")
+            # Fallback to SEHK if SMART fails
+            self.contract = Stock(symbol, 'SEHK', 'HKD')
+            await self.ib.qualifyContractsAsync(self.contract)
+            print(f"Contract set: {symbol} on SEHK exchange")
         
     async def _async_check_position(self, direction, contract):
         """Check position in async context"""
