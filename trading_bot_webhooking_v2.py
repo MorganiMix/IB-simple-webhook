@@ -7,8 +7,8 @@ import queue
 import time
 
 ############################
-exchange="SMART" # Use SMART routing to avoid direct routing fees
-instructment="AAPL" # contract of the trade
+exchange="SEHK" # Hong Kong Stock Exchange
+instructment="2800" # Tracker Fund of Hong Kong (HK stock)
 ############################
 
 class TradingBotAsync:
@@ -75,10 +75,10 @@ class TradingBotAsync:
         
     async def _async_set_contract(self, exchange, secType, symbol):
         """Set contract in async context"""
-        # Use SMART routing instead of direct exchange routing
-        self.contract = Stock(symbol, 'SMART', 'USD')
+        # Use SEHK for Hong Kong stocks with HKD currency
+        self.contract = Stock(symbol, 'SEHK', 'HKD')
         await self.ib.qualifyContractsAsync(self.contract)
-        print(f"Contract set: {symbol} with SMART routing")
+        print(f"Contract set: {symbol} on SEHK exchange")
         
     async def _async_check_position(self, direction, contract):
         """Check position in async context"""
