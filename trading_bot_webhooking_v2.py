@@ -9,13 +9,15 @@ import time
 ############################
 exchange="SMART" # Use SMART routing for Hong Kong stocks
 instructment="2800" # Tracker Fund of Hong Kong (HK stock)
+min_order_size=500 # Minimum order size for HK stock 2800
 ############################
 
 class TradingBotAsync:
-    def __init__(self, host, port, clientId):
+    def __init__(self, host, port, clientId, min_order_size=500):
         self.host = host
         self.port = port
         self.clientId = clientId
+        self.min_order_size = min_order_size
         self.ib = IB()
         self.contract = None
         self.L_log = []
@@ -126,9 +128,9 @@ class TradingBotAsync:
                     pos.contract.exchange == contract.exchange and
                     pos.contract.secType == contract.secType):
                     
-                    if direction == "long" and pos.position >= 1:
+                    if direction == "long" and pos.position >= self.min_order_size:
                         return True
-                    elif direction == "short" and pos.position <= -1:
+                    elif direction == "short" and pos.position <= -self.min_order_size:
                         return True
             return False
         except Exception as e:
@@ -237,7 +239,7 @@ class TradingBotAsync:
 # Initialize bot
 print("Initializing trading bot...")
 try:
-    bot = TradingBotAsync('127.0.0.1', 4002, 130)
+    bot = TradingBotAsync('127.0.0.1', 4002, 130, min_order_size)
     print("Bot connected to IB successfully")
     
     # Try to set contract with detailed logging
@@ -246,6 +248,7 @@ try:
     
     if bot.contract:
         print(f"✓ Bot initialized successfully with contract: {bot.contract}")
+        print(f"✓ Minimum order size set to: {min_order_size} shares")
     else:
         print("✗ Warning: Contract not set properly")
         
@@ -304,8 +307,8 @@ def webhook():
             position_exists = bot.check_contract_position(direction, contract)
             
             if not position_exists:
-                # No existing position, place new order
-                result = bot.submit_order(contract, direction, 1)
+                # No existing position, place new order with minimum required size
+                result = bot.submit_order(contract, direction, min_order_size)
                 success_msg = f"Webhook received: {result}"
                 print(success_msg)
                 return success_msg
