@@ -7,7 +7,11 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+# Set timezone to avoid timezone issues
+ENV TZ=UTC
 
 # Copy requirements first for better caching
 COPY requirements.txt .
