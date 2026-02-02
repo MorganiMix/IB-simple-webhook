@@ -45,7 +45,7 @@ docker-compose down
 docker build -t trading-bot .
 
 # Run the container
-docker run -p 8000:8000 --network host trading-bot
+docker run -p 8001:8001 --network host trading-bot
 ```
 
 ## Testing the Webhook
@@ -54,15 +54,15 @@ Once running, test the webhook endpoints:
 
 ```bash
 # Test GET endpoint
-curl http://localhost:8000/test
+curl http://localhost:8001/test
 
 # Test webhook with long position
-curl -X POST http://localhost:8000/webhook \
+curl -X POST http://localhost:8001/webhook \
   -H "Content-Type: application/json" \
   -d '{"direction": "long"}'
 
 # Test webhook with short position
-curl -X POST http://localhost:8000/webhook \
+curl -X POST http://localhost:8001/webhook \
   -H "Content-Type: application/json" \
   -d '{"direction": "short"}'
 ```
@@ -70,14 +70,14 @@ curl -X POST http://localhost:8000/webhook \
 ## Important Notes
 
 - **Network Mode**: Uses `host` networking to connect to IB on localhost
-- **Port 8000**: Webhook server runs on this port
+- **Port 8001**: Webhook server runs on this port
 - **Health Check**: Automatically checks if the service is responding
 - **Restart Policy**: Container restarts unless manually stopped
 
 ## Troubleshooting
 
 1. **Connection Issues**: Ensure IB TWS/Gateway is running and API is enabled
-2. **Port Conflicts**: Make sure port 8000 is available
+2. **Port Conflicts**: Make sure port 8001 is available
 3. **Client ID**: Use a unique client ID (130 in the example)
 4. **Permissions**: Ensure Docker has necessary permissions
 

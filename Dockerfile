@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY trading_bot_webhooking_v2.py .
 
 # Expose the webhook port
-EXPOSE 8000
+EXPOSE 8001
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1

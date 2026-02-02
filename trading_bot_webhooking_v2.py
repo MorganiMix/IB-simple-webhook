@@ -377,6 +377,6 @@ def webhook():
 
 # Run the Flask app
 if __name__ == '__main__':
-    logger.info("Starting webhook server on port 8000...")
+    logger.info("Starting webhook server on port 8001...")
     logger.info("Bot will initialize automatically when IB Gateway becomes available")
-    app.run(host='0.0.0.0', port=8000)
+    app.run(host='0.0.0.0', port=8001)

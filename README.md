@@ -42,7 +42,7 @@ instructment="MHI"     # Your contract symbol (e.g., "AAPL", "ES", "MHI")
 ```bash
 python trading_bot_webhooking_simplified_v1.py
 ```
-3. The webhook server will start on `http://0.0.0.0:8000`
+3. The webhook server will start on `http://0.0.0.0:8001`
 
 ## TradingView Webhook Setup
 
@@ -56,9 +56,9 @@ python trading_bot_webhooking_simplified_v1.py
 
 1. In the alert dialog, scroll down to "Notifications"
 2. Check "Webhook URL"
-3. Enter your webhook URL: `http://YOUR_SERVER_IP:8000/webhook`
-   - For local testing: `http://localhost:8000/webhook`
-   - For remote server: `http://your-server-ip:8000/webhook`
+3. Enter your webhook URL: `http://YOUR_SERVER_IP:8001/webhook`
+   - For local testing: `http://localhost:8001/webhook`
+   - For remote server: `http://your-server-ip:8001/webhook`
 
 ### Step 3: Set Alert Message
 
@@ -103,7 +103,7 @@ The bot expects JSON messages with the following structure:
 
 ## Security Considerations
 
-1. **Firewall**: Only open port 8000 to TradingView's IP ranges if possible
+1. **Firewall**: Only open port 8001 to TradingView's IP ranges if possible
 2. **Authentication**: Consider adding API key authentication for production use
 3. **HTTPS**: Use HTTPS in production environments
 4. **Validation**: The bot validates all incoming webhook data
@@ -120,7 +120,7 @@ The bot expects JSON messages with the following structure:
 2. **Webhook Not Received**:
    - Check firewall settings
    - Verify webhook URL is accessible
-   - Test with curl: `curl -X POST -H "Content-Type: application/json" -d '{"direction":"long"}' http://localhost:8000/webhook`
+   - Test with curl: `curl -X POST -H "Content-Type: application/json" -d '{"direction":"long"}' http://localhost:8001/webhook`
 
 3. **Order Not Placed**:
    - Check IB connection status
@@ -134,7 +134,7 @@ Test your webhook locally:
 ```bash
 curl -X POST -H "Content-Type: application/json" \
   -d '{"direction":"long"}' \
-  http://localhost:8000/webhook
+  http://localhost:8001/webhook
 ```
 
 ## Production Deployment
