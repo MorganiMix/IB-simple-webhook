@@ -2,9 +2,14 @@ version: '3.8'
 
 services:
   trading-bot:
-    build: .
+    build:
+      context: .
+      args:
+        WEBHOOK_PORT: ${WEBHOOK_PORT:-8001}
     ports:
-      - "8001:8001"
+      - "${WEBHOOK_PORT:-8001}:${WEBHOOK_PORT:-8001}"
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
@@ -12,7 +17,7 @@ services:
     volumes:
       - ./logs:/app/logs  # Optional: for persistent logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/test"]
+      test: ["CMD", "curl", "-f", "http://localhost:${WEBHOOK_PORT:-8001}/test"]
       interval: 30s
       timeout: 10s
       retries: 3

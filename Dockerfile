@@ -22,8 +22,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY trading_bot_webhooking_v2.py .
 
-# Expose the webhook port
-EXPOSE 8001
+# Set default webhook port (can be overridden)
+ARG WEBHOOK_PORT=8001
+ENV WEBHOOK_PORT=${WEBHOOK_PORT}
+
+# Expose the webhook port (documentation only)
+EXPOSE ${WEBHOOK_PORT}
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1

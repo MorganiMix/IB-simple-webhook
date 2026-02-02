@@ -6,16 +6,26 @@ import threading
 import queue
 import time
 import logging
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 ############################
-exchange="SMART" # Use SMART routing for Hong Kong stocks
-instructment="2800" # Tracker Fund of Hong Kong (HK stock)
-min_order_size=500 # Minimum order size for HK stock 2800
-retry_interval=30 # Retry initialization every 30 seconds if failed
+# Configuration from environment variables
+exchange = os.getenv('EXCHANGE', 'SMART')
+instructment = os.getenv('INSTRUMENT', '2800')
+order_size = int(os.getenv('ORDER_SIZE', '500'))
+retry_interval = int(os.getenv('RETRY_INTERVAL', '30'))
+ib_host = os.getenv('IB_HOST', '127.0.0.1')
+ib_port = int(os.getenv('IB_PORT', '4002'))
+client_id = int(os.getenv('CLIENT_ID', '130'))
+webhook_port = int(os.getenv('WEBHOOK_PORT', '8001'))
 ############################
 
 class BotManager:
@@ -59,7 +69,7 @@ class BotManager:
         def init_worker():
             try:
                 logger.info("Starting bot initialization...")
-                new_bot = TradingBotAsync('127.0.0.1', 4002, 130, min_order_size)
+                new_bot = TradingBotAsync(ib_host, ib_port, client_id, order_size)
                 logger.info("Bot connected to IB successfully")
                 
                 # Try to set contract
@@ -68,7 +78,7 @@ class BotManager:
                 
                 if new_bot.contract:
                     logger.info(f"✓ Bot initialized successfully with contract: {new_bot.contract}")
-                    logger.info(f"✓ Minimum order size set to: {min_order_size} shares")
+                    logger.info(f"✓ Order size set to: {order_size} shares")
                     self.bot = new_bot
                 else:
                     logger.warning("✗ Warning: Contract not set properly")
@@ -86,11 +96,11 @@ class BotManager:
 bot_manager = BotManager()
 
 class TradingBotAsync:
-    def __init__(self, host, port, clientId, min_order_size=500):
+    def __init__(self, host, port, clientId, order_size=500):
         self.host = host
         self.port = port
         self.clientId = clientId
-        self.min_order_size = min_order_size
+        self.order_size = order_size
         self.ib = IB()
         self.contract = None
         self.L_log = []
@@ -201,9 +211,9 @@ class TradingBotAsync:
                     pos.contract.exchange == contract.exchange and
                     pos.contract.secType == contract.secType):
                     
-                    if direction == "long" and pos.position >= self.min_order_size:
+                    if direction == "long" and pos.position >= self.order_size:
                         return True
-                    elif direction == "short" and pos.position <= -self.min_order_size:
+                    elif direction == "short" and pos.position <= -self.order_size:
                         return True
             return False
         except Exception as e:
@@ -360,7 +370,7 @@ def webhook():
             
             if not position_exists:
                 # No existing position, place new order with minimum required size
-                result = bot.submit_order(bot.contract, direction, min_order_size)
+                result = bot.submit_order(bot.contract, direction, order_size)
                 success_msg = f"Webhook received: {result}"
                 logger.info(success_msg)
                 return success_msg
@@ -377,6 +387,6 @@ def webhook():
 
 # Run the Flask app
 if __name__ == '__main__':
-    logger.info("Starting webhook server on port 8001...")
+    logger.info(f"Starting webhook server on port {webhook_port}...")
     logger.info("Bot will initialize automatically when IB Gateway becomes available")
-    app.run(host='0.0.0.0', port=8001)
+    app.run(host='0.0.0.0', port=webhook_port)
