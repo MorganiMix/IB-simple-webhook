@@ -5,12 +5,85 @@ import asyncio
 import threading
 import queue
 import time
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 ############################
 exchange="SMART" # Use SMART routing for Hong Kong stocks
 instructment="2800" # Tracker Fund of Hong Kong (HK stock)
 min_order_size=500 # Minimum order size for HK stock 2800
+retry_interval=30 # Retry initialization every 30 seconds if failed
 ############################
+
+class BotManager:
+    def __init__(self):
+        self.bot = None
+        self.initialization_thread = None
+        self.is_initializing = False
+        self.last_init_attempt = 0
+        
+    def get_bot(self):
+        """Get the bot instance, trigger initialization if needed"""
+        current_time = time.time()
+        
+        # If bot is None or not connected, and enough time has passed since last attempt
+        if (self.bot is None or not self._is_bot_connected()) and \
+           (current_time - self.last_init_attempt) > retry_interval and \
+           not self.is_initializing:
+            
+            logger.info("Bot not available, triggering initialization...")
+            self._start_initialization()
+            
+        return self.bot
+    
+    def _is_bot_connected(self):
+        """Check if bot is connected and has a valid contract"""
+        try:
+            return (self.bot is not None and 
+                   self.bot.ib.isConnected() and 
+                   self.bot.contract is not None)
+        except:
+            return False
+    
+    def _start_initialization(self):
+        """Start bot initialization in a separate thread"""
+        if self.is_initializing:
+            return
+            
+        self.is_initializing = True
+        self.last_init_attempt = time.time()
+        
+        def init_worker():
+            try:
+                logger.info("Starting bot initialization...")
+                new_bot = TradingBotAsync('127.0.0.1', 4002, 130, min_order_size)
+                logger.info("Bot connected to IB successfully")
+                
+                # Try to set contract
+                logger.info(f"Setting contract for {instructment} on {exchange}...")
+                new_bot.set_contract(exchange, "STK", instructment)
+                
+                if new_bot.contract:
+                    logger.info(f"✓ Bot initialized successfully with contract: {new_bot.contract}")
+                    logger.info(f"✓ Minimum order size set to: {min_order_size} shares")
+                    self.bot = new_bot
+                else:
+                    logger.warning("✗ Warning: Contract not set properly")
+                    
+            except Exception as e:
+                logger.error(f"✗ Error initializing bot: {str(e)}")
+                logger.info("Will retry initialization in 30 seconds...")
+            finally:
+                self.is_initializing = False
+        
+        self.initialization_thread = threading.Thread(target=init_worker, daemon=True)
+        self.initialization_thread.start()
+
+# Global bot manager
+bot_manager = BotManager()
 
 class TradingBotAsync:
     def __init__(self, host, port, clientId, min_order_size=500):
@@ -236,30 +309,9 @@ class TradingBotAsync:
         except queue.Empty:
             raise Exception("Order submission timeout")
 
-# Initialize bot
-print("Initializing trading bot...")
-try:
-    bot = TradingBotAsync('127.0.0.1', 4002, 130, min_order_size)
-    print("Bot connected to IB successfully")
-    
-    # Try to set contract with detailed logging
-    print(f"Setting contract for {instructment} on {exchange}...")
-    bot.set_contract(exchange, "STK", instructment)
-    
-    if bot.contract:
-        print(f"✓ Bot initialized successfully with contract: {bot.contract}")
-        print(f"✓ Minimum order size set to: {min_order_size} shares")
-    else:
-        print("✗ Warning: Contract not set properly")
-        
-except Exception as e:
-    print(f"✗ Error initializing bot: {str(e)}")
-    print("Common issues:")
-    print("1. IB TWS/Gateway not running or not connected")
-    print("2. Market data permissions not enabled for Hong Kong stocks")
-    print("3. Client ID already in use")
-    print("4. Wrong port number (try 7497 for TWS live, 7496 for TWS paper)")
-    raise
+# Initialize bot manager and start first initialization attempt
+logger.info("Starting bot manager...")
+bot_manager._start_initialization()
 
 # Webhook setup
 app = Flask(__name__)
@@ -277,53 +329,54 @@ def webhook():
         try:
             # Log the raw request data for debugging
             raw_data = request.get_data(as_text=True)
-            print(f"Raw webhook data received: {raw_data}")
-            print(f"Content-Type: {request.content_type}")
+            logger.info(f"Raw webhook data received: {raw_data}")
+            logger.info(f"Content-Type: {request.content_type}")
             
             # Try to get JSON data
             message = request.json
             if not message:
-                print("Error: No JSON data could be parsed")
+                logger.error("Error: No JSON data could be parsed")
                 return "Error: No JSON data received or invalid JSON format", 400
             
-            print(f"Parsed JSON: {message}")
+            logger.info(f"Parsed JSON: {message}")
             
             direction = message.get("direction")
             if not direction:
-                print("Error: 'direction' field missing from JSON")
+                logger.error("Error: 'direction' field missing from JSON")
                 return "Error: 'direction' field is required", 400
             
             if direction not in ["long", "short"]:
-                print(f"Error: Invalid direction value: {direction}")
+                logger.error(f"Error: Invalid direction value: {direction}")
                 return f"Error: Invalid direction '{direction}'. Must be 'long' or 'short'", 400
             
-            # Use the bot's contract
-            contract = bot.contract
-            if not contract:
-                print("Error: Bot contract not initialized")
-                return "Error: Bot contract not initialized", 500
+            # Get bot instance (will trigger initialization if needed)
+            bot = bot_manager.get_bot()
+            if not bot or not bot.contract:
+                logger.warning("Bot not initialized or contract not available, will retry soon...")
+                return "Bot not ready, initialization in progress. Please try again in a moment.", 503
             
             # Check if position already exists
-            position_exists = bot.check_contract_position(direction, contract)
+            position_exists = bot.check_contract_position(direction, bot.contract)
             
             if not position_exists:
                 # No existing position, place new order with minimum required size
-                result = bot.submit_order(contract, direction, min_order_size)
+                result = bot.submit_order(bot.contract, direction, min_order_size)
                 success_msg = f"Webhook received: {result}"
-                print(success_msg)
+                logger.info(success_msg)
                 return success_msg
             else:
                 # Position already exists
                 skip_msg = f"Webhook received: {direction} position already exists, skipping order"
-                print(skip_msg)
+                logger.info(skip_msg)
                 return skip_msg
                 
         except Exception as e:
             error_msg = f"Error processing webhook: {str(e)}"
-            print(error_msg)
+            logger.error(error_msg)
             return error_msg, 400
 
 # Run the Flask app
 if __name__ == '__main__':
-    print("Starting webhook server on port 8000...")
-    app.run(host='0.0.0.0', port=8001)
+    logger.info("Starting webhook server on port 8000...")
+    logger.info("Bot will initialize automatically when IB Gateway becomes available")
+    app.run(host='0.0.0.0', port=8000)
