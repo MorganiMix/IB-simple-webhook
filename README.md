@@ -24,7 +24,7 @@ This trading bot connects to Interactive Brokers (IB) and receives webhook signa
 ### 1. Clone and Configure
 
 ```bash
-git clone <repository>
+git clone https://github.com/MorganiMix/IB-simple-webhook
 cd trading-bot
 cp .env.example .env
 ```
