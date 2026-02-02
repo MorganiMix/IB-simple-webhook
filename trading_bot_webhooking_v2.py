@@ -163,26 +163,39 @@ class TradingBotAsync:
         
     async def _async_set_contract(self, exchange, secType, symbol):
         """Set contract in async context"""
-        # For Hong Kong stocks, try different contract formats
-        contracts_to_try = [
-            # Try with SEHK exchange first
-            Stock(symbol, 'SEHK', 'HKD'),
-            # Try with SMART routing
-            Stock(symbol, 'SMART', 'HKD'),
-            # Try with full symbol format (some HK stocks need .HK suffix)
-            Stock(f"{symbol}.HK", 'SMART', 'HKD'),
-        ]
+        # Determine if this is a US stock or HK stock based on symbol
+        is_hk_stock = (symbol.isdigit() or 
+                      symbol.startswith('0') or 
+                      symbol.endswith('.HK') or
+                      exchange in ['SEHK', 'HKEX'])
+        
+        if is_hk_stock:
+            # Hong Kong stock contracts
+            contracts_to_try = [
+                Stock(symbol, 'SEHK', 'HKD'),
+                Stock(symbol, 'SMART', 'HKD'),
+                Stock(f"{symbol}.HK", 'SMART', 'HKD'),
+            ]
+            logger.info(f"Detected Hong Kong stock: {symbol}")
+        else:
+            # US stock contracts
+            contracts_to_try = [
+                Stock(symbol, 'SMART', 'USD'),
+                Stock(symbol, 'NASDAQ', 'USD'),
+                Stock(symbol, 'NYSE', 'USD'),
+            ]
+            logger.info(f"Detected US stock: {symbol}")
         
         for i, contract in enumerate(contracts_to_try):
             try:
-                print(f"Trying contract {i+1}: {contract.symbol} on {contract.exchange}")
+                logger.info(f"Trying contract {i+1}: {contract.symbol} on {contract.exchange} ({contract.currency})")
                 qualified_contracts = await self.ib.qualifyContractsAsync(contract)
                 if qualified_contracts:
                     self.contract = qualified_contracts[0]
-                    print(f"✓ Contract qualified successfully: {self.contract}")
+                    logger.info(f"✓ Contract qualified successfully: {self.contract}")
                     return
             except Exception as e:
-                print(f"✗ Contract {i+1} failed: {e}")
+                logger.info(f"✗ Contract {i+1} failed: {e}")
                 continue
         
         # If all attempts fail, raise an error
@@ -211,9 +224,13 @@ class TradingBotAsync:
                     pos.contract.exchange == contract.exchange and
                     pos.contract.secType == contract.secType):
                     
-                    if direction == "long" and pos.position >= self.order_size:
+                    # For position checking, use a minimum threshold
+                    # US stocks typically trade in units of 1, HK stocks in units of 100-500
+                    min_position_threshold = 1 if contract.currency == 'USD' else 100
+                    
+                    if direction == "long" and pos.position >= min_position_threshold:
                         return True
-                    elif direction == "short" and pos.position <= -self.order_size:
+                    elif direction == "short" and pos.position <= -min_position_threshold:
                         return True
             return False
         except Exception as e:

@@ -131,6 +131,23 @@ curl -X POST http://localhost:8001/webhook \
 
 ## Configuration Examples
 
+### Stock Type Detection
+
+The bot automatically detects whether you're trading US or Hong Kong stocks:
+
+**US Stocks (USD currency):**
+- Alphabetic symbols: AAPL, MSFT, GOOGL
+- Uses USD currency and US exchanges (SMART, NASDAQ, NYSE)
+- Typical order size: 1 share
+
+**Hong Kong Stocks (HKD currency):**
+- Numeric symbols: 2800, 0005, 0700
+- Symbols ending in .HK: 2800.HK
+- Uses HKD currency and Hong Kong exchanges (SEHK, SMART)
+- Typical order size: 100-500 shares (board lots)
+
+### Configuration Examples
+
 ### For US Stocks (AAPL)
 ```bash
 EXCHANGE=SMART
