@@ -232,17 +232,31 @@ python trading_bot_webhooking_v2.py
 
 In the "Message" field, use this JSON format:
 
-**For Buy Signal:**
+**For Buy Signal (Open Long):**
 ```json
 {
   "direction": "long"
 }
 ```
 
-**For Sell Signal:**
+**For Sell Signal (Open Short):**
 ```json
 {
   "direction": "short"
+}
+```
+
+**For Close Long Position:**
+```json
+{
+  "direction": "close_long"
+}
+```
+
+**For Close Short Position:**
+```json
+{
+  "direction": "close_short"
 }
 ```
 
@@ -252,6 +266,22 @@ In the "Message" field, use this JSON format:
 2. Set expiration date
 3. Click "Create"
 
+## Webhook Message Format
+
+The bot expects JSON messages with the following structure:
+
+```json
+{
+  "direction": "long"    // "long", "short", "close_long", or "close_short"
+}
+```
+
+### Supported Directions:
+- **`"long"`**: Open a long position (buy)
+- **`"short"`**: Open a short position (sell)
+- **`"close_long"`**: Close existing long position (sell to close)
+- **`"close_short"`**: Close existing short position (buy to close)
+
 ## Testing the Webhook
 
 Once running, test the webhook endpoints:
@@ -260,21 +290,40 @@ Once running, test the webhook endpoints:
 # Test GET endpoint
 curl http://localhost:8001/test
 
-# Test webhook with long position
+# Test webhook with long position (buy)
 curl -X POST http://localhost:8001/webhook \
   -H "Content-Type: application/json" \
   -d '{"direction": "long"}'
 
-# Test webhook with short position
+# Test webhook with short position (sell)
 curl -X POST http://localhost:8001/webhook \
   -H "Content-Type: application/json" \
   -d '{"direction": "short"}'
+
+# Test webhook to close long position
+curl -X POST http://localhost:8001/webhook \
+  -H "Content-Type: application/json" \
+  -d '{"direction": "close_long"}'
+
+# Test webhook to close short position
+curl -X POST http://localhost:8001/webhook \
+  -H "Content-Type: application/json" \
+  -d '{"direction": "close_short"}'
 ```
 
 ## Bot Behavior
 
-- **New Position**: If no existing position, places market order for specified quantity
+### Opening Positions:
+- **New Long Position**: If no existing position, places buy market order for specified quantity
+- **New Short Position**: If no existing position, places sell market order for specified quantity
 - **Existing Position**: If position already exists in the same direction, skips the order
+
+### Closing Positions:
+- **Close Long**: Finds existing long position and places sell order to close entire position
+- **Close Short**: Finds existing short position and places buy order to close entire position
+- **No Position**: If no position exists to close, returns appropriate message
+
+### General Behavior:
 - **Auto-Retry**: Automatically retries IB connection if Gateway becomes unavailable
 - **Logging**: All actions are logged with timestamps
 - **Error Handling**: Connection issues and invalid requests are handled gracefully
@@ -357,12 +406,17 @@ For production use:
 
 ```pinescript
 //@version=5
-strategy("Webhook Example", overlay=true)
+strategy("Webhook Example with Close Signals", overlay=true)
 
 // Your strategy logic here
 longCondition = ta.crossover(ta.sma(close, 14), ta.sma(close, 28))
 shortCondition = ta.crossunder(ta.sma(close, 14), ta.sma(close, 28))
 
+// Close conditions (example: opposite signal or stop loss)
+closeLongCondition = ta.crossunder(ta.sma(close, 14), ta.sma(close, 28))
+closeShortCondition = ta.crossover(ta.sma(close, 14), ta.sma(close, 28))
+
+// Open positions
 if longCondition
     strategy.entry("Long", strategy.long)
     alert('{"direction": "long"}', alert.freq_once_per_bar_close)
@@ -370,6 +424,15 @@ if longCondition
 if shortCondition
     strategy.entry("Short", strategy.short)
     alert('{"direction": "short"}', alert.freq_once_per_bar_close)
+
+// Close positions
+if closeLongCondition and strategy.position_size > 0
+    strategy.close("Long")
+    alert('{"direction": "close_long"}', alert.freq_once_per_bar_close)
+
+if closeShortCondition and strategy.position_size < 0
+    strategy.close("Short")
+    alert('{"direction": "close_short"}', alert.freq_once_per_bar_close)
 ```
 
 ## Configuration Examples

@@ -148,6 +148,9 @@ class TradingBotAsync:
                         elif command['action'] == 'submit_order':
                             result = await self._async_submit_order(command['contract'], command['direction'], command['qty'])
                             self.result_queue.put(result)
+                        elif command['action'] == 'close_position':
+                            result = await self._async_close_position(command['contract'], command['direction'])
+                            self.result_queue.put(result)
                         elif command['action'] == 'stop':
                             break
                             
@@ -213,6 +216,69 @@ class TradingBotAsync:
                 return {'error': 'Could not qualify HK test contract'}
         except Exception as e:
             return {'error': f'Market data permission test failed: {e}'}
+            
+    async def _async_close_position(self, contract, direction):
+        """Close existing position in async context"""
+        try:
+            positions = self.ib.positions()
+            target_position = None
+            
+            # Find the existing position
+            for pos in positions:
+                if (pos.contract.symbol == contract.symbol and 
+                    pos.contract.exchange == contract.exchange and
+                    pos.contract.secType == contract.secType):
+                    target_position = pos
+                    break
+            
+            if not target_position:
+                return {'error': 'No position found to close'}
+            
+            current_position = target_position.position
+            
+            # Determine if we should close this position
+            if direction == "close_long" and current_position <= 0:
+                return {'error': 'No long position to close'}
+            elif direction == "close_short" and current_position >= 0:
+                return {'error': 'No short position to close'}
+            
+            # Determine the closing order action and quantity
+            if direction == "close_long":
+                action = "SELL"
+                qty = abs(current_position)  # Close entire long position
+            else:  # close_short
+                action = "BUY"
+                qty = abs(current_position)  # Close entire short position
+            
+            # Create market order to close position
+            order = MarketOrder(action, qty)
+            order.tif = 'GTC'
+            order.outsideRth = True
+            
+            trade = self.ib.placeOrder(contract, order)
+            
+            # Wait a moment for order processing
+            await asyncio.sleep(2)
+            
+            # Check if order was filled or still pending
+            if trade.orderStatus.status in ['Filled', 'PartiallyFilled']:
+                status_msg = f"Position closed: {action} {qty} {contract.symbol} (was {current_position})"
+            elif trade.orderStatus.status == 'Submitted':
+                status_msg = f"Close order submitted: {action} {qty} {contract.symbol}"
+            elif trade.orderStatus.status == 'Cancelled':
+                return {'error': f'Close order cancelled: {trade.log[-1].message if trade.log else "Unknown reason"}'}
+            else:
+                status_msg = f"Close order status: {trade.orderStatus.status} - {action} {qty} {contract.symbol}"
+            
+            self.L_log.append([datetime.now(timezone.utc), status_msg])
+            logger.info(status_msg)
+            
+            return {'success': status_msg}
+            
+        except Exception as e:
+            error_msg = f'Position close failed: {e}'
+            self.L_log.append([datetime.now(timezone.utc), error_msg])
+            return {'error': error_msg}
         
     async def _async_check_position(self, direction, contract):
         """Check position in async context"""
@@ -335,6 +401,25 @@ class TradingBotAsync:
             return result
         except queue.Empty:
             raise Exception("Order submission timeout")
+    
+    def close_position(self, contract, direction):
+        """Thread-safe position closing"""
+        self.command_queue.put({
+            'action': 'close_position',
+            'contract': contract,
+            'direction': direction
+        })
+        
+        try:
+            result = self.result_queue.get(timeout=30)
+            if isinstance(result, dict):
+                if 'error' in result:
+                    raise Exception(result['error'])
+                elif 'success' in result:
+                    return result['success']
+            return result
+        except queue.Empty:
+            raise Exception("Position closing timeout")
 
 # Initialize bot manager and start first initialization attempt
 logger.info("Starting bot manager...")
@@ -372,9 +457,9 @@ def webhook():
                 logger.error("Error: 'direction' field missing from JSON")
                 return "Error: 'direction' field is required", 400
             
-            if direction not in ["long", "short"]:
+            if direction not in ["long", "short", "close_long", "close_short"]:
                 logger.error(f"Error: Invalid direction value: {direction}")
-                return f"Error: Invalid direction '{direction}'. Must be 'long' or 'short'", 400
+                return f"Error: Invalid direction '{direction}'. Must be 'long', 'short', 'close_long', or 'close_short'", 400
             
             # Get bot instance (will trigger initialization if needed)
             bot = bot_manager.get_bot()
@@ -382,6 +467,19 @@ def webhook():
                 logger.warning("Bot not initialized or contract not available, will retry soon...")
                 return "Bot not ready, initialization in progress. Please try again in a moment.", 503
             
+            # Handle close positions
+            if direction in ["close_long", "close_short"]:
+                result = bot.close_position(bot.contract, direction)
+                if result:
+                    success_msg = f"Webhook received: {result}"
+                    logger.info(success_msg)
+                    return success_msg
+                else:
+                    skip_msg = f"Webhook received: No {direction.replace('close_', '')} position to close"
+                    logger.info(skip_msg)
+                    return skip_msg
+            
+            # Handle open positions (existing logic)
             # Check if position already exists
             position_exists = bot.check_contract_position(direction, bot.contract)
             
