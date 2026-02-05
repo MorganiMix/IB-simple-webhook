@@ -87,6 +87,9 @@ All bot settings are configurable via the `.env` file:
 | `CLIENT_ID` | Unique client ID | `130` | `130`, `131`, `132` |
 | `RETRY_INTERVAL` | Retry connection every N seconds | `30` | `30`, `60` |
 | `WEBHOOK_PORT` | Port for webhook server | `8001` | `8001`, `8000`, `9000` |
+| `ENABLE_SECURITY_FILTER` | Enable security filtering | `true` | `true`, `false` |
+| `RATE_LIMIT_REQUESTS` | Max requests per IP per window | `10` | `10`, `20`, `5` |
+| `RATE_LIMIT_WINDOW` | Rate limit window in seconds | `60` | `60`, `120`, `30` |
 
 ### Stock Type Detection
 
@@ -288,7 +291,10 @@ Once running, test the webhook endpoints:
 
 ```bash
 # Test GET endpoint
-curl http://localhost:8001/test
+curl http://localhost:8001/
+
+# Test health endpoint
+curl http://localhost:8001/health
 
 # Test webhook with long position (buy)
 curl -X POST http://localhost:8001/webhook \
@@ -382,6 +388,37 @@ curl -X POST http://localhost:8001/webhook \
      -d '{"direction":"long"}' \
      http://localhost:8001/webhook
    ```
+
+## Security Features
+
+The bot includes built-in security features to protect against malicious traffic:
+
+### **Rate Limiting**
+- Limits requests per IP address (default: 10 requests per 60 seconds)
+- Configurable via `RATE_LIMIT_REQUESTS` and `RATE_LIMIT_WINDOW`
+- Returns HTTP 429 (Too Many Requests) when exceeded
+
+### **Malicious Request Detection**
+- Blocks SSL/TLS handshake attempts
+- Blocks SSH connection attempts  
+- Blocks requests to unauthorized paths
+- Blocks suspicious user agents
+
+### **Security Configuration**
+```bash
+# Enable/disable security filtering
+ENABLE_SECURITY_FILTER=true
+
+# Rate limiting settings
+RATE_LIMIT_REQUESTS=10    # Max requests per window
+RATE_LIMIT_WINDOW=60      # Window size in seconds
+```
+
+### **Endpoints**
+- **`/`** - Basic info page
+- **`/webhook`** - Main webhook endpoint for trading signals
+- **`/test`** - Test endpoint for debugging
+- **`/health`** - Health check endpoint (used by Docker)
 
 ## Security Considerations
 

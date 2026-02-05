@@ -17,7 +17,7 @@ services:
     volumes:
       - ./logs:/app/logs  # Optional: for persistent logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${WEBHOOK_PORT:-8001}/test"]
+      test: ["CMD", "curl", "-f", "http://localhost:${WEBHOOK_PORT:-8001}/health"]
       interval: 30s
       timeout: 10s
       retries: 3

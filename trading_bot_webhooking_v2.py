@@ -1,4 +1,4 @@
-from flask import Flask, request
+from flask import Flask, request, abort
 from ib_insync import *
 from datetime import datetime, timezone
 import asyncio
@@ -8,6 +8,7 @@ import time
 import logging
 import os
 from dotenv import load_dotenv
+from collections import defaultdict, deque
 
 # Load environment variables
 load_dotenv()
@@ -26,6 +27,11 @@ ib_host = os.getenv('IB_HOST', '127.0.0.1')
 ib_port = int(os.getenv('IB_PORT', '4002'))
 client_id = int(os.getenv('CLIENT_ID', '130'))
 webhook_port = int(os.getenv('WEBHOOK_PORT', '8001'))
+
+# Security settings
+enable_security_filter = os.getenv('ENABLE_SECURITY_FILTER', 'true').lower() == 'true'
+rate_limit_requests = int(os.getenv('RATE_LIMIT_REQUESTS', '10'))
+rate_limit_window = int(os.getenv('RATE_LIMIT_WINDOW', '60'))
 ############################
 
 class BotManager:
@@ -428,12 +434,89 @@ bot_manager._start_initialization()
 # Webhook setup
 app = Flask(__name__)
 
+# Simple rate limiting and security
+request_counts = defaultdict(lambda: deque())
+RATE_LIMIT_WINDOW = rate_limit_window
+RATE_LIMIT_MAX_REQUESTS = rate_limit_requests
+BLOCKED_USER_AGENTS = ['Go-http-client', 'python-requests', 'curl', 'wget']
+ALLOWED_PATHS = ['/', '/webhook', '/test', '/health']
+
+def is_rate_limited(ip):
+    """Simple rate limiting by IP"""
+    now = time.time()
+    requests = request_counts[ip]
+    
+    # Remove old requests outside the window
+    while requests and requests[0] < now - RATE_LIMIT_WINDOW:
+        requests.popleft()
+    
+    # Check if over limit
+    if len(requests) >= RATE_LIMIT_MAX_REQUESTS:
+        return True
+    
+    # Add current request
+    requests.append(now)
+    return False
+
+def is_malicious_request():
+    """Detect potentially malicious requests"""
+    # Check for SSL/TLS handshake attempts
+    if request.data and request.data.startswith(b'\x16\x03'):
+        return True
+    
+    # Check for SSH attempts
+    if request.data and b'SSH-' in request.data:
+        return True
+    
+    # Check for suspicious paths
+    if request.path not in ALLOWED_PATHS and not request.path.startswith('/webhook'):
+        return True
+    
+    # Check user agent (optional - might block legitimate requests)
+    user_agent = request.headers.get('User-Agent', '').lower()
+    if any(blocked in user_agent for blocked in ['bot', 'scanner', 'crawler']):
+        return True
+    
+    return False
+
+@app.before_request
+def security_filter():
+    """Filter malicious requests before processing"""
+    if not enable_security_filter:
+        return
+        
+    client_ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.remote_addr)
+    
+    # Rate limiting
+    if is_rate_limited(client_ip):
+        logger.warning(f"Rate limited IP: {client_ip}")
+        abort(429)  # Too Many Requests
+    
+    # Malicious request detection
+    if is_malicious_request():
+        logger.warning(f"Blocked malicious request from {client_ip}: {request.path}")
+        abort(400)  # Bad Request
+
+@app.route('/')
+def index():
+    """Root endpoint - returns basic info"""
+    return "Trading Bot Webhook Server - Use POST /webhook for signals"
+
 @app.route('/test', methods=['GET', 'POST'])
 def test():
     if request.method == 'GET':
         return "Webhook server is running! Use POST to /webhook with JSON data."
     else:
         return f"Test POST received. Data: {request.get_data(as_text=True)}"
+
+@app.route('/health')
+def health():
+    """Health check endpoint"""
+    bot = bot_manager.get_bot()
+    if bot and bot.contract:
+        return {"status": "healthy", "bot": "connected", "contract": str(bot.contract)}
+    else:
+        return {"status": "initializing", "bot": "connecting"}, 503
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
