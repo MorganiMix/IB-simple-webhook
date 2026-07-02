@@ -29,6 +29,53 @@ client_id = int(os.getenv('CLIENT_ID', '130'))
 webhook_port = int(os.getenv('WEBHOOK_PORT', '8001'))
 webhook_path = os.getenv('WEBHOOK_PATH', '/webhook')
 
+# Instrument type (STK = stock, FUT = future)
+sec_type = os.getenv('SEC_TYPE', 'STK').upper()
+# For futures: 'YYYYMM' (e.g. '202609'), or 'auto' to pick the front month
+contract_month = os.getenv('CONTRACT_MONTH', 'auto')
+# Empty string = auto-detect from exchange (USD for US venues, EUR for EUREX, HKD for HKFE/SEHK)
+currency = os.getenv('CURRENCY', '')
+
+# Default currency by exchange — used when CURRENCY env var is empty
+_DEFAULT_CURRENCY_BY_EXCHANGE = {
+    'NYMEX': 'USD', 'COMEX': 'USD', 'CME': 'USD', 'CBOT': 'USD',
+    'EUREX': 'EUR', 'HKFE': 'HKD',
+    'SEHK': 'HKD', 'HKEX': 'HKD',
+    'SMART': 'USD', 'NASDAQ': 'USD', 'NYSE': 'USD', 'ARCA': 'USD',
+}
+
+def _candidate_contract_months(configured):
+    """Build a YYYYMM list to try for a future, in priority order.
+
+    If `configured` is a 6/8-digit numeric string, try it first; then fall
+    back to a rolling list of upcoming months (handles 'auto' or unset).
+    """
+    candidates = []
+    if configured and str(configured).strip().lower() != 'auto':
+        cm = str(configured).strip()
+        if cm.isdigit() and len(cm) in (6, 8):
+            candidates.append(cm[:6])
+
+    now = datetime.now()
+    for offset in range(0, 8):
+        m = now.month - 1 + offset
+        y = now.year + m // 12
+        m = m % 12 + 1
+        candidates.append(f"{y}{m:02d}")
+
+    # Preserve order, drop dupes
+    seen, ordered = set(), []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            ordered.append(c)
+    return ordered
+
+def _resolve_currency(exchange, configured):
+    if configured:
+        return str(configured).strip().upper()
+    return _DEFAULT_CURRENCY_BY_EXCHANGE.get(str(exchange).upper(), 'USD')
+
 # Security settings
 enable_security_filter = os.getenv('ENABLE_SECURITY_FILTER', 'true').lower() == 'true'
 rate_limit_requests = int(os.getenv('RATE_LIMIT_REQUESTS', '10'))
@@ -79,9 +126,9 @@ class BotManager:
                 new_bot = TradingBotAsync(ib_host, ib_port, client_id, order_size)
                 logger.info("Bot connected to IB successfully")
                 
-                # Try to set contract
-                logger.info(f"Setting contract for {instructment} on {exchange}...")
-                new_bot.set_contract(exchange, "STK", instructment)
+                # Try to set contract (STK or FUT, configured via SEC_TYPE)
+                logger.info(f"Setting contract for {instructment} on {exchange} (secType={sec_type})...")
+                new_bot.set_contract(exchange, sec_type, instructment, contract_month, currency)
                 
                 if new_bot.contract:
                     logger.info(f"✓ Bot initialized successfully with contract: {new_bot.contract}")
@@ -145,7 +192,13 @@ class TradingBotAsync:
                             continue
                             
                         if command['action'] == 'set_contract':
-                            await self._async_set_contract(command['exchange'], command['secType'], command['symbol'])
+                            await self._async_set_contract(
+                                command['exchange'],
+                                command['secType'],
+                                command['symbol'],
+                                command.get('contract_month'),
+                                command.get('currency'),
+                            )
                         elif command['action'] == 'test_permissions':
                             result = await self._async_test_permissions()
                             self.result_queue.put(result)
@@ -171,14 +224,19 @@ class TradingBotAsync:
         
         loop.run_until_complete(async_main())
         
-    async def _async_set_contract(self, exchange, secType, symbol):
-        """Set contract in async context"""
+    async def _async_set_contract(self, exchange, secType, symbol, contract_month=None, currency=None):
+        """Set contract in async context. Dispatches to stock or future flow."""
+        if str(secType).upper() == 'FUT':
+            await self._async_set_future(exchange, symbol, contract_month, currency)
+            return
+
+        # ----- Stock flow (unchanged) -----
         # Determine if this is a US stock or HK stock based on symbol
-        is_hk_stock = (symbol.isdigit() or 
-                      symbol.startswith('0') or 
+        is_hk_stock = (symbol.isdigit() or
+                      symbol.startswith('0') or
                       symbol.endswith('.HK') or
                       exchange in ['SEHK', 'HKEX'])
-        
+
         if is_hk_stock:
             # Hong Kong stock contracts
             contracts_to_try = [
@@ -195,21 +253,48 @@ class TradingBotAsync:
                 Stock(symbol, 'NYSE', 'USD'),
             ]
             logger.info(f"Detected US stock: {symbol}")
-        
+
         for i, contract in enumerate(contracts_to_try):
             try:
-                logger.info(f"Trying contract {i+1}: {contract.symbol} on {contract.exchange} ({contract.currency})")
+                logger.info(f"Trying stock contract {i+1}: {contract.symbol} on {contract.exchange} ({contract.currency})")
                 qualified_contracts = await self.ib.qualifyContractsAsync(contract)
                 if qualified_contracts:
                     self.contract = qualified_contracts[0]
-                    logger.info(f"✓ Contract qualified successfully: {self.contract}")
+                    logger.info(f"✓ Stock contract qualified successfully: {self.contract}")
                     return
             except Exception as e:
-                logger.info(f"✗ Contract {i+1} failed: {e}")
+                logger.info(f"✗ Stock contract {i+1} failed: {e}")
                 continue
-        
+
         # If all attempts fail, raise an error
-        raise Exception(f"Could not qualify contract for symbol {symbol}. Check market data permissions and symbol format.")
+        raise Exception(f"Could not qualify stock {symbol} on {exchange}. Check market data permissions and symbol format.")
+
+    async def _async_set_future(self, exchange, symbol, contract_month=None, currency=None):
+        """Qualify a futures contract by trying a list of candidate expiry months."""
+        ccy = _resolve_currency(exchange, currency)
+        months = _candidate_contract_months(contract_month)
+
+        for month in months:
+            try:
+                contract = Future(
+                    symbol=symbol,
+                    exchange=exchange,
+                    currency=ccy,
+                    lastTradeDateOrContractMonth=month,
+                )
+                logger.info(f"Trying future: {symbol} on {exchange} ({ccy}) expiry {month}")
+                qualified_contracts = await self.ib.qualifyContractsAsync(contract)
+                if qualified_contracts:
+                    self.contract = qualified_contracts[0]
+                    logger.info(f"✓ Future contract qualified: {self.contract}")
+                    logger.info(f"✓ Selected expiry month: {month}")
+                    return
+            except Exception as e:
+                logger.info(f"✗ Future {month} failed: {e}")
+                continue
+
+        raise Exception(f"Could not qualify future {symbol} on {exchange} (currency={ccy}, tried months {months}). "
+                        f"Check market data permissions and that the symbol/contract_month is valid.")
         
     async def _async_test_permissions(self):
         """Test market data permissions"""
@@ -349,13 +434,20 @@ class TradingBotAsync:
             self.L_log.append([datetime.now(timezone.utc), error_msg])
             return {'error': error_msg}
     
-    def set_contract(self, exchange, secType, symbol):
-        """Thread-safe contract setting"""
+    def set_contract(self, exchange, secType, symbol, contract_month=None, currency=None):
+        """Thread-safe contract setting.
+
+        For secType='FUT', `contract_month` can be a YYYYMM string (e.g. '202609')
+        or omitted to pick the front month automatically. `currency` defaults to
+        a sensible value based on the exchange; set it explicitly to override.
+        """
         self.command_queue.put({
             'action': 'set_contract',
             'exchange': exchange,
             'secType': secType,
-            'symbol': symbol
+            'symbol': symbol,
+            'contract_month': contract_month,
+            'currency': currency,
         })
         time.sleep(3)  # Give more time for contract qualification
         
