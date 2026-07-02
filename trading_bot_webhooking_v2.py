@@ -534,15 +534,17 @@ def webhook():
                 return "Error: No JSON data received or invalid JSON format", 400
             
             logger.info(f"Parsed JSON: {message}")
-            
-            direction = message.get("direction")
+
+            # New webhook format uses the direction as a key (e.g. {"long"}, {"short"}, {"close_long"}, {"close_short"})
+            direction = None
+            for key in ["long", "short", "close_long", "close_short"]:
+                if key in message:
+                    direction = key
+                    break
+
             if not direction:
-                logger.error("Error: 'direction' field missing from JSON")
-                return "Error: 'direction' field is required", 400
-            
-            if direction not in ["long", "short", "close_long", "close_short"]:
-                logger.error(f"Error: Invalid direction value: {direction}")
-                return f"Error: Invalid direction '{direction}'. Must be 'long', 'short', 'close_long', or 'close_short'", 400
+                logger.error(f"Error: No valid direction key found in JSON: {message}")
+                return "Error: JSON must contain one of these keys: 'long', 'short', 'close_long', 'close_short'", 400
             
             # Get bot instance (will trigger initialization if needed)
             bot = bot_manager.get_bot()
