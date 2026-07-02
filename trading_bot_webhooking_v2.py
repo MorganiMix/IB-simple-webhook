@@ -27,6 +27,7 @@ ib_host = os.getenv('IB_HOST', '127.0.0.1')
 ib_port = int(os.getenv('IB_PORT', '4002'))
 client_id = int(os.getenv('CLIENT_ID', '130'))
 webhook_port = int(os.getenv('WEBHOOK_PORT', '8001'))
+webhook_path = os.getenv('WEBHOOK_PATH', '/webhook')
 
 # Security settings
 enable_security_filter = os.getenv('ENABLE_SECURITY_FILTER', 'true').lower() == 'true'
@@ -439,7 +440,7 @@ request_counts = defaultdict(lambda: deque())
 RATE_LIMIT_WINDOW = rate_limit_window
 RATE_LIMIT_MAX_REQUESTS = rate_limit_requests
 BLOCKED_USER_AGENTS = ['Go-http-client', 'python-requests', 'curl', 'wget']
-ALLOWED_PATHS = ['/', '/webhook', '/test', '/health']
+ALLOWED_PATHS = ['/', webhook_path, '/test', '/health']
 
 def is_rate_limited(ip):
     """Simple rate limiting by IP"""
@@ -469,7 +470,7 @@ def is_malicious_request():
         return True
     
     # Check for suspicious paths
-    if request.path not in ALLOWED_PATHS and not request.path.startswith('/webhook'):
+    if request.path not in ALLOWED_PATHS and not request.path.startswith(webhook_path):
         return True
     
     # Check user agent (optional - might block legitimate requests)
@@ -500,7 +501,7 @@ def security_filter():
 @app.route('/')
 def index():
     """Root endpoint - returns basic info"""
-    return "Trading Bot Webhook Server - Use POST /webhook for signals"
+    return f"Trading Bot Webhook Server - Use POST {webhook_path} for signals"
 
 @app.route('/test', methods=['GET', 'POST'])
 def test():
@@ -518,33 +519,52 @@ def health():
     else:
         return {"status": "initializing", "bot": "connecting"}, 503
 
-@app.route('/webhook', methods=['POST'])
+@app.route(webhook_path, methods=['POST'])
 def webhook():
     if request.method == 'POST':
         try:
             # Log the raw request data for debugging
-            raw_data = request.get_data(as_text=True)
+            raw_data = request.get_data(as_text=True).strip()
             logger.info(f"Raw webhook data received: {raw_data}")
             logger.info(f"Content-Type: {request.content_type}")
-            
-            # Try to get JSON data
-            message = request.json
-            if not message:
-                logger.error("Error: No JSON data could be parsed")
-                return "Error: No JSON data received or invalid JSON format", 400
-            
-            logger.info(f"Parsed JSON: {message}")
 
-            # New webhook format uses the direction as a key (e.g. {"long"}, {"short"}, {"close_long"}, {"close_short"})
+            # Map any "exit_*" aliases to the "close_*" form the bot expects
+            direction_aliases = {
+                "exit_long": "close_long",
+                "exit_short": "close_short",
+            }
+            valid_directions = {"long", "short", "close_long", "close_short"}
+
             direction = None
-            for key in ["long", "short", "close_long", "close_short"]:
-                if key in message:
-                    direction = key
-                    break
 
-            if not direction:
-                logger.error(f"Error: No valid direction key found in JSON: {message}")
-                return "Error: JSON must contain one of these keys: 'long', 'short', 'close_long', 'close_short'", 400
+            # 1) Try to parse as JSON (handles {"long"}, {"short": true}, etc.)
+            # force=True ignores missing/incorrect Content-Type, silent=True returns None on parse failure
+            message = request.get_json(force=True, silent=True)
+            if isinstance(message, dict):
+                for key in valid_directions:
+                    if key in message:
+                        direction = key
+                        break
+                logger.info(f"Parsed JSON: {message}")
+
+            # 2) Fall back to treating the raw body as a plain-text direction
+            # (e.g. sender posts raw "long", "exit_long", etc.)
+            if direction is None and raw_data:
+                candidate = raw_data.strip().strip('"').strip("'")
+                if candidate.startswith('{') and candidate.endswith('}'):
+                    # Bare JSON like {"long"} without a value — extract the key
+                    inner = candidate.strip('{}').strip().strip('"').strip("'")
+                    if inner in valid_directions or inner in direction_aliases:
+                        candidate = inner
+                direction = direction_aliases.get(candidate, candidate)
+
+            if not direction or direction not in valid_directions:
+                logger.error(f"Error: Could not extract direction from payload: {raw_data!r}")
+                return (f"Error: Could not extract direction. "
+                        f"Send JSON like {{\"long\"}} or plain text like 'long', "
+                        f"'short', 'close_long', 'close_short'"), 400
+
+            logger.info(f"Direction resolved to: {direction}")
             
             # Get bot instance (will trigger initialization if needed)
             bot = bot_manager.get_bot()
